@@ -1,0 +1,55 @@
+name: Daily Game News
+
+on:
+  schedule:
+    # Run every 4 hours
+    - cron: '0 */4 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Fetch News
+        run: node scripts/fetch-news.js
+
+      - name: Generate Posts
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: node scripts/generate-posts.js
+
+      - name: Commit New Posts
+        run: |
+          git config --global user.name 'GamePulse Bot'
+          git config --global user.email 'bot@gamepulse.com'
+          git add content/posts data/processed-urls.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Automated: New posts generated" && git push)
+
+      - name: Build Static Site
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./out
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
