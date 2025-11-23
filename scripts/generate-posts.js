@@ -3,10 +3,9 @@ const path = require('path');
 const OpenAI = require('openai');
 
 // Initialize OpenAI
-// Note: In a real environment, ensure LLM_API_KEY is set.
 const openai = new OpenAI({
     apiKey: process.env.LLM_API_KEY || 'mock-key',
-    dangerouslyAllowBrowser: true // Not needed for node but good practice to know
+    dangerouslyAllowBrowser: true
 });
 
 const DATA_DIR = path.join(__dirname, '../data');
@@ -34,7 +33,6 @@ async function generatePosts() {
         }
     }
 
-    // Process top 10 that haven't been processed
     let count = 0;
     for (const item of rawNews) {
         if (count >= 10) break;
@@ -42,8 +40,8 @@ async function generatePosts() {
 
         console.log(`Processing: ${item.title}`);
 
+        // 1. Generate Content
         let content = '';
-
         if (process.env.LLM_API_KEY) {
             try {
                 const completion = await openai.chat.completions.create({
@@ -54,27 +52,59 @@ async function generatePosts() {
                 content = completion.choices[0].message.content;
             } catch (e) {
                 console.error("LLM Error (using fallback):", e.message);
-                // Fallback
                 content = `## ${item.title}\n\n*Source: ${item.source}*\n\n${item.contentSnippet}\n\n[Read more](${item.link})`;
             }
         } else {
-            // Mock content for when no API key is present
             content = `## ${item.title}\n\n*Source: ${item.source}*\n\n> **Note:** This is a placeholder because no \`LLM_API_KEY\` was found in the environment. In production, this would be rewritten by AI.\n\n${item.contentSnippet || item.content}\n\n[Read original article](${item.link})`;
         }
 
-        // Create frontmatter
-        // Sanitize slug
+        // 2. Handle Image (Extract or Generate)
         const slug = item.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '').substring(0, 100);
-        const date = new Date().toISOString();
+        let imageUrl = null;
 
-        // Try to find an image
-        let imageUrl = 'https://placehold.co/600x400/1a1a1a/00ff9d?text=Game+News';
+        // Try extraction first
         if (item.enclosure && item.enclosure.url) {
             imageUrl = item.enclosure.url;
         } else if (item.content && item.content.match(/src=["'](https?:\/\/[^"']+\.(jpg|png|jpeg|webp))/i)) {
             imageUrl = item.content.match(/src=["'](https?:\/\/[^"']+\.(jpg|png|jpeg|webp))/i)[1];
         }
 
+        // If no image found, generate one using DALL-E
+        if (!imageUrl && process.env.LLM_API_KEY) {
+            try {
+                console.log(`Generating image for: ${item.title}`);
+                const imageResponse = await openai.images.generate({
+                    model: "dall-e-3",
+                    prompt: `A futuristic, cinematic, high-quality digital art image representing the video game news title: "${item.title}". Cyberpunk, neon, 4k, highly detailed, gaming aesthetic. No text.`,
+                    n: 1,
+                    size: "1024x1024",
+                    quality: "standard",
+                });
+
+                const url = imageResponse.data[0].url;
+                const imgRes = await fetch(url);
+                const buffer = Buffer.from(await imgRes.arrayBuffer());
+
+                const relativePath = `/images/generated/${slug}.png`;
+                const absolutePath = path.join(__dirname, '../public/images/generated', `${slug}.png`);
+
+                const dir = path.dirname(absolutePath);
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+                fs.writeFileSync(absolutePath, buffer);
+                imageUrl = `/GameNewsBlog${relativePath}`; // Hardcoded basePath
+            } catch (e) {
+                console.error("Image Gen Error:", e.message);
+            }
+        }
+
+        // Fallback
+        if (!imageUrl) {
+            imageUrl = 'https://placehold.co/600x400/1a1a1a/00ff9d?text=Game+News';
+        }
+
+        // 3. Create File
+        const date = new Date().toISOString();
         const fileContent = `---
 title: "${item.title.replace(/"/g, '\\"')}"
 date: "${date}"
